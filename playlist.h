@@ -29,12 +29,12 @@ namespace cxx {
             using track_map = std::map<T, std::list<p_queue_iter>>;
 
             // Dane o pojedynczym odtworzeniu - trzyma unikatowe dla odtworzenia
-            // params. Informację o podanym utworze pozyskujemy z trackNode_ptr.
-            // Ponieważ trackNode_ptr w liście będącej wartością trzyma wskaźnik
+            // params. Informację o podanym utworze pozyskujemy z track_nod_ptr.
+            // Ponieważ track_nod_ptr w liście będącej wartością trzyma wskaźnik
             // na nas, to przy usuwaniu playNode, naszą odpowiedzialnością jest, aby
             // wywołać na tej liście .erase(self_ptr)
             struct playNode {
-                typename track_map::iterator trackNode_ptr;
+                typename track_map::iterator track_nod_ptr;
                 typename std::list<p_queue_iter>::iterator self_ptr;
                 P params;
             };
@@ -42,12 +42,63 @@ namespace cxx {
             // Tutaj naprawdę przechowywane są dane playlisty, definiowana jest
             // też większośc operacji. Operacje playlisty to głównie wrappery.
             struct playlistData {
-                p_queue play_queue;
-                track_map tracks;
-
+                p_queue play_queue{};
+                track_map tracks{};
 
                 playlistData() = default;
+
+                // Robi głęboką kopię, zgodną z logiką plejlist (dpowiednio
+                // przestawia wskaźniki). Zadba o to by nie stworzyć obiektu,
+                // jeśli push_back się nie powiedzie.
+                playlistData(const playlistData & other) {
+                    p_queue & pq = other.play_queue;
+                    for (auto it = pq.begin(); it != pq.end(); ++it) {
+                        push_back(it->track_nod_ptr->first, it->params);
+                    }
+                }
+                playlistData(playlistData && other) = default;
+
+                // Usuwamy operator=, bo pozwalałby na robienie niebezpiecznych
+                // kopii, jako, że nasze obiekty trzymają wskaźniki na siebie.
                 playlistData & operator=(const playlistData & other) = delete;
+
+                // Tymczasowy jest jednak bezpieczny, bo przywłaszczymy sobie
+                // całą strukturę, wraz z odpowiedzialnością za nią.
+                playlistData & operator=(playlistData && other) = default;
+
+                // Twoja funkcja - tylko przesunąłem ją niżej, bo tu się też
+                // przyda. Ponadto trochę pozmieniałem, by uzyskać strong
+                // exception safety.
+                void push_back (T const &track, P const &params) {
+                    // emplace już gwarantuje strong excp-safety....
+                    auto [map_it, added] = tracks.emplace(track, 
+                                        std::list<p_queue_iter>{});
+
+                    try {
+                        play_queue.push_back({map_it, nullptr, params});
+                    } catch (...) {
+                        // rollback zmian 1, push_back nie wyszedł
+                        if (added)
+                            tracks.erase(map_it);
+                        throw;
+                    }
+
+                    // get iterator for this node
+                    p_queue_iter queue_it = std::prev(play_queue.end());
+
+                    // Może tak jest trochę czytelniej?
+                    try {
+                        auto & list_it = map_it->second.insert
+                                            (map_it->second.end(), queue_it);
+                        queue_it->self_ptr = list_it;
+                    } catch (...) {
+                        // rollback zmian 2, jeśli insert nie wyszedł
+                        play_queue.pop_back();
+                        if (added)
+                            tracks.erase(map_it);
+                        throw;
+                    }
+                }
             };
 
             // Dane playlisty -> shared_ptr na dane, oraz flaga,
@@ -85,27 +136,7 @@ namespace cxx {
 
             void push_back (T const &track, P const &params) { // O(log n)
                 ensure_unique();
-                auto map_it = data_->tracks.find(track);
-                // add if its a new track
-                if (map_it == data_->tracks.end()) {
-                    // emplace().first is an iteratior to the inserted element
-                    map_it = data_->tracks.emplace(
-                        track, std::list<p_queue_iter>{}).first;
-                }
-
-                // add playNode in the queue with a temporary nullptr
-                data_->play_queue.push_back({map_it, nullptr, params});
-                // get iterator for this node
-                p_queue_iter queue_it = std::prev(data_->play_queue.end());
-
-                // add this iterator to the back of the list in the map, using
-                // insert to get an iterator back,
-                // then add said iterator to our node in queue, 
-                // replacing the temporary nullptr.
-
-                // TODO: phew that was a long comment but the line is confusing so ... mby this coudld be refactored using some tmp variable like "list_it", but idk
-                queue_it->self_ptr = map_it->second.insert(map_it->second.end(),
-                                                           queue_it);
+                data_->push_back(track, params);
             }
 
             void pop_front() { // O(1) + throws std::out_of_range
@@ -115,7 +146,7 @@ namespace cxx {
                 ensure_unique();
 
                 playNode &node = data_->play_queue.front();
-                node.trackNode_ptr->second.erase(node.self_ptr);
+                node.track_nod_ptr->second.erase(node.self_ptr);
                 data_->play_queue.pop_front();
             }
 
@@ -126,7 +157,7 @@ namespace cxx {
                 }
                 
                 playNode &node = data_->play_queue.front();
-                return {node.trackNode_ptr->first, node.params};
+                return {node.track_nod_ptr->first, node.params};
             }
 
             // O((k + 1)log n) + std::invalid_argument 
