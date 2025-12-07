@@ -101,9 +101,14 @@ namespace cxx {
                 }
             };
 
-            // Dane playlisty -> shared_ptr na dane, oraz flaga,
-            // informująca czy wnętrze playlisty może być współdzielone.
             std::shared_ptr<playlistData> data_;
+            /* Wydaje mi się że ta flaga jest konieczna, była w jednym z GOTW co
+             * Peczarski wrzucał. W implementacji stringów, których kontenery maja
+             * się zachowywać 1 do 1 jak nasze playlistData.
+             * Ona ma być ustawiana na true, gdy udostępnimy użytkownikowi iterator.
+             * Wtedy nie będzie bugu, że damy iterator, skopiujemy siebie, a potem ten
+             * iterator zmieni nie tylko nas, ale też obiekt który z siebie stworzyliśmy.
+            */
             bool unshareable_ = false;
 
             /*
@@ -113,12 +118,13 @@ namespace cxx {
             Wtedy modyfikowany obiekt tworzy własną kopię zasobów, na których wykonuje modyfikację. Udostępnienie referencji nie-const umożliwiającej modyfikowanie stanu struktury uniemożliwia jej (dalsze) współdzielenie do czasu unieważnienia udzielonej referencji.
             Przyjmujemy, że taka referencja ulega unieważnieniu po dowolnej modyfikacji struktury.
             */
-            // wydaje mi sić że tak to można rozwiazać:
+            
+            // Po wywołaniu tej funkcji obiekt ma pewność,
+            // że brudzi dane, do którychma wyłączny dostęp.
+            // Daje strong excp-guarantee, wyrzuca wyjątek dalej.
             void ensure_unique() {
                 if (data_.use_count() > 1) {
-                    // TODO: głęboka kopia danych z data_ do siebie :P
-                    // można chyba zrobić kilka konstruktorów do playlistData
-                    // i to zaimplementować za pomocą jednego z nich
+                    data_ = std::make_shared<playlistData>(*data_);
                 }
             }
 
@@ -127,12 +133,28 @@ namespace cxx {
             playlist()
                 : data_(std::make_shared<playlistData>()) {}
             
-            playlist(playlist const &other);  // O(1)
-            playlist(playlist &&other);  // O(1)
-            ~playlist(); // O(1)
+            // Jeśli other jest w trakcie modyfikacji, musimy go skopiować,
+            // używamy do tego dobrze przepinającego wskaźniki konstruktora
+            // kopiującego klasy playlistData.
+            playlist(playlist const &other)
+                : data_(other.unshareable_ // if
+                    ? std::make_shared<playlistData>(*other.data_) // then
+                    : other.data_), unshareable_(false) {} // else
 
-            // sprawdzać this != &other
-            playlist & operator=(playlist other); // O(1)
+            // magia shared_ptr - pozwala nam na użycie default lub proste
+            // przypisanie, bez sprawdzania czy this != &opther.
+            playlist(playlist &&other) = default;
+            ~playlist() = default;
+
+            // Gdy kopia playlistData w nowym std::make_shared się nie uda,
+            // warto by rzucić wyjątek (na 90%?), dlatego go nie łapię.
+            playlist & operator=(playlist other) {
+                data_ = other.unshareable_ // if
+                    ? std::make_shared<playlistData>(*other.data_) // then
+                    : other.data_; // else
+                unshareable_ = false;
+                return *this;
+            }
 
             void push_back (T const &track, P const &params) { // O(log n)
                 ensure_unique();
