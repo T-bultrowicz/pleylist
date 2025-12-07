@@ -99,6 +99,25 @@ namespace cxx {
                         throw;
                     }
                 }
+
+                // if all node destructors are noexept
+                // then all the erase / pop function call are also noexept
+                // thus this whole fuction should be strongly exeption safe ?
+                void pop_front() {
+                    if (play_queue.empty()) {
+                        throw std::out_of_range("pop_front(), empty playlist");
+                    }
+
+                    playNode &node = play_queue.front();
+
+                    node.track_nod_ptr->second.erase(node.self_ptr);
+                    // only play of the track => remove it from the map
+                    if (node.track_nod_ptr->second.empty()) {
+                        tracks.erase(node.track_nod_ptr);
+                    }
+                    
+                    play_queue.pop_front();
+                }
             };
 
             std::shared_ptr<playlistData> data_;
@@ -162,14 +181,8 @@ namespace cxx {
             }
 
             void pop_front() { // O(1) + throws std::out_of_range
-                if (data_->play_queue.empty()) {
-                    throw std::out_of_range("pop_front(), empty playlist");
-                }
                 ensure_unique();
-
-                playNode &node = data_->play_queue.front();
-                node.track_nod_ptr->second.erase(node.self_ptr);
-                data_->play_queue.pop_front();
+                data_->pop_front();
             }
 
             // O(1) + std::out_of_range
