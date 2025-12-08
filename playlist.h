@@ -2,6 +2,7 @@
 #define PLAYLIST_H
 
 #include <cstdlib>
+#include <compare>
 #include <cinttypes>
 #include <memory>
 #include <map>
@@ -57,6 +58,7 @@ namespace cxx {
                     }
                 }
                 playlistData(playlistData && other) = default;
+                ~playlistData() = default;
 
                 // Usuwamy operator=, bo pozwalałby na robienie niebezpiecznych
                 // kopii, jako, że nasze obiekty trzymają wskaźniki na siebie.
@@ -102,7 +104,8 @@ namespace cxx {
 
                 // if all node destructors are noexept
                 // then all the erase / pop function call are also noexept
-                // thus this whole fuction should be strongly exeption safe ?
+                // thus this whole fuction should be strongly exeption safe ?  --> I think yep,
+                // destructors can't really throw anything.
                 void pop_front() {
                     if (play_queue.empty()) {
                         throw std::out_of_range("pop_front(), empty playlist");
@@ -145,6 +148,7 @@ namespace cxx {
                 if (data_.use_count() > 1) {
                     data_ = std::make_shared<playlistData>(*data_);
                 }
+                unshareable_ = false;
             }
 
         public:
@@ -186,7 +190,7 @@ namespace cxx {
             }
 
             // O(1) + std::out_of_range
-            const std::pair<T const &, P const &> front() {
+            const std::pair<T const &, P const &> front() const {
                 if (data_->play_queue.empty()) {
                     throw std::out_of_range("front(), empty playlist");
                 }
@@ -212,32 +216,90 @@ namespace cxx {
                 data_->tracks.erase(map_it);
             }
 
-            void clear(); // O(n) - wywala wszystko
+            // strong expc guarantee bo tylko make_shared się wywala ->
+            // wtedy nie dochodzi do przypisania.
+            void clear() {
+                data_ = std::make_shared<playlistData>();
+            }
 
-            size_t size() { // O(1)
+            size_t size() const { // O(1)
                 return data_->play_queue.size();
             }
 
-            // iteratorowe
+            // Implementacja iteratorów
             class play_iterator {
                 private:
-                    // std::list<playN>::iterator it;
+                    p_queue_iter it;
+                    play_iterator(p_queue_iter pqi): it(pqi) {}
+                
+                public:
+                    play_iterator &
+                    operator=(const play_iterator & o) = default;
+
+                    std::strong_ordering 
+                    operator<=>(const play_iterator & o) = delete;
+                    bool operator==(const play_iterator & o) const = default;
+                    bool operator!=(const play_iterator & o) const = default;
+
+                    play_iterator & operator++() {
+                        it++;
+                        return *this;
+                    }
+
+                    play_iterator operator++(int) {
+                        auto tmp = *this;
+                        it++;
+                        return tmp;
+                    }
             };
 
             class sorted_iterator {
+                using t_map_c_iter = typename track_map::const_iterator;
                 private:
-                    typename track_map::iterator it;
+                    t_map_c_iter it;
+                    sorted_iterator(t_map_c_iter tmci): it(tmci) {}
                 
+                public:
+                    sorted_iterator & 
+                    operator=(const sorted_iterator & o) = default;
+
+                    std::strong_ordering 
+                    operator<=>(const sorted_iterator & o) = delete;
+                    bool operator==(const sorted_iterator & o) const = default;
+                    bool operator!=(const sorted_iterator & o) const = default;
+
+                    sorted_iterator & operator++() {
+                        it++;
+                        return *this;
+                    }
+
+                    sorted_iterator operator++(int) {
+                        auto tmp = *this;
+                        it++;
+                        return tmp;
+                    }
             };
+
             const std::pair<T const &, P const &> play(play_iterator const &it); // O(1)
             const std::pair<T const &, size_t> pay(sorted_iterator const &it); // O(k) !!!
             P & params(play_iterator const &it); // O(1)
             const P & params(play_iterator const &it) const; // O(1)
 
-            play_iterator play_begin(); // O(1)
-            play_iterator play_end(); // O(1)
-            sorted_iterator sorted_begin(); // O(1)
-            sorted_iterator sorted_end(); // O(1)
+            play_iterator play_begin() {
+                return play_iterator(data_->play_queue.begin());
+            }
+
+            play_iterator play_end() {
+                return play_iterator(data_->play_queue.end());
+            }
+
+            sorted_iterator sorted_begin() {
+                return sorted_iterator(data_->tracks.begin());
+            }
+
+            sorted_iterator sorted_end() {
+                return sorted_iterator(data_->tracks.end());
+            }
     };
 
 } // namespace cxx
