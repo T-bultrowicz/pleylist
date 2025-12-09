@@ -1,3 +1,8 @@
+// TODO:
+// make_unique wrapper
+// noexept
+// fix loop (mby this != other while copying)
+
 #ifndef PLAYLIST_H
 #define PLAYLIST_H
 
