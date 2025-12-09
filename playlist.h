@@ -52,7 +52,7 @@ namespace cxx {
                 // przestawia wskaźniki). Zadba o to by nie stworzyć obiektu,
                 // jeśli push_back się nie powiedzie.
                 playlistData(const playlistData & other) {
-                    p_queue & pq = other.play_queue;
+                    const p_queue & pq = other.play_queue;
                     for (auto it = pq.begin(); it != pq.end(); ++it) {
                         push_back(it->track_nod_ptr->first, it->params);
                     }
@@ -77,7 +77,7 @@ namespace cxx {
                                         std::list<p_queue_iter>{});
 
                     try {
-                        play_queue.push_back({map_it, nullptr, params});
+                        play_queue.push_back({map_it, {}, params});
                     } catch (...) {
                         // rollback zmian 1, push_back nie wyszedł
                         if (added)
@@ -90,7 +90,7 @@ namespace cxx {
 
                     // Może tak jest trochę czytelniej?
                     try {
-                        auto & list_it = map_it->second.insert
+                        auto list_it = map_it->second.insert
                                             (map_it->second.end(), queue_it);
                         queue_it->self_ptr = list_it;
                     } catch (...) {
@@ -230,9 +230,9 @@ namespace cxx {
             class play_iterator {
                 private:
                     p_queue_iter it;
+                public:
                     play_iterator(p_queue_iter pqi): it(pqi) {}
                 
-                public:
                     play_iterator &
                     operator=(const play_iterator & o) = default;
 
@@ -247,19 +247,22 @@ namespace cxx {
                     }
 
                     play_iterator operator++(int) {
-                        auto tmp = *this;
+                        play_iterator tmp(it);
                         it++;
                         return tmp;
+                    }
+
+                    const playNode & operator*() const noexcept {
+                        return *it;
                     }
             };
 
             class sorted_iterator {
                 using t_map_c_iter = typename track_map::const_iterator;
                 private:
-                    t_map_c_iter it;
-                    sorted_iterator(t_map_c_iter tmci): it(tmci) {}
-                
+                    t_map_c_iter it;       
                 public:
+                    sorted_iterator(t_map_c_iter tmci): it(tmci) {}
                     sorted_iterator & 
                     operator=(const sorted_iterator & o) = default;
 
@@ -274,30 +277,48 @@ namespace cxx {
                     }
 
                     sorted_iterator operator++(int) {
-                        auto tmp = *this;
+                        sorted_iterator tmp(it);
                         it++;
                         return tmp;
                     }
+
+                    const std::pair<T, std::list<p_queue_iter>> & operator*() const noexcept {
+                        return *it;
+                    }
             };
 
-            const std::pair<T const &, P const &> play(play_iterator const &it); // O(1)
-            const std::pair<T const &, size_t> pay(sorted_iterator const &it); // O(k) !!!
-            P & params(play_iterator const &it); // O(1)
-            const P & params(play_iterator const &it) const; // O(1)
+            const std::pair<T const &, P const &> play(play_iterator const &it)
+            const {
+                return {(*it).track_nod_ptr->first, (*it).params};
+            }
+            const std::pair<T const &, size_t> pay(sorted_iterator const &it)
+            const {
+                return {(*it).first, (*it).second.size()};
+            }
 
-            play_iterator play_begin() {
+            P & params(play_iterator const &it) {
+                ensure_unique();
+                unshareable_ = true;
+
+                return (*it).params;
+            }
+            const P & params(play_iterator const &it) const {
+                return (*it).params;
+            }
+
+            play_iterator play_begin() const {
                 return play_iterator(data_->play_queue.begin());
             }
 
-            play_iterator play_end() {
+            play_iterator play_end() const {
                 return play_iterator(data_->play_queue.end());
             }
 
-            sorted_iterator sorted_begin() {
+            sorted_iterator sorted_begin() const {
                 return sorted_iterator(data_->tracks.begin());
             }
 
-            sorted_iterator sorted_end() {
+            sorted_iterator sorted_end() const {
                 return sorted_iterator(data_->tracks.end());
             }
     };
