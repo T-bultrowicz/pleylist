@@ -2,11 +2,12 @@
 #define PLAYLIST_H
 
 #include <cstdlib>
+#include <cstddef>
 #include <compare>
-#include <cinttypes>
 #include <memory>
 #include <map>
 #include <vector>
+#include <iterator>
 #include <list>
 #include <stdexcept>
 
@@ -108,7 +109,7 @@ namespace cxx {
                 // destructors can't really throw anything.
                 void pop_front() {
                     if (play_queue.empty()) {
-                        throw std::out_of_range("pop_front(), empty playlist");
+                        throw std::out_of_range("pop_front, playlist empty");
                     }
 
                     playNode &node = play_queue.front();
@@ -131,7 +132,7 @@ namespace cxx {
              * Wtedy nie będzie bugu, że damy iterator, skopiujemy siebie, a potem ten
              * iterator zmieni nie tylko nas, ale też obiekt który z siebie stworzyliśmy.
             */
-            bool unshareable_ = false;
+            bool shareable_ = false;
 
             /*
             Kontener powinien realizować semantykę kopiowania przy modyfikowaniu (ang. copy on write).
@@ -148,7 +149,6 @@ namespace cxx {
                 if (data_.use_count() > 1) {
                     data_ = std::make_shared<playlistData>(*data_);
                 }
-                unshareable_ = false;
             }
 
         public:
@@ -160,9 +160,9 @@ namespace cxx {
             // używamy do tego dobrze przepinającego wskaźniki konstruktora
             // kopiującego klasy playlistData.
             playlist(playlist const &other)
-                : data_(other.unshareable_ // if
+                : data_(!other.shareable_ // if
                     ? std::make_shared<playlistData>(*other.data_) // then
-                    : other.data_), unshareable_(false) {} // else
+                    : other.data_), shareable_(true) {} // else
 
             // magia shared_ptr - pozwala nam na użycie default lub proste
             // przypisanie, bez sprawdzania czy this != &opther.
@@ -172,16 +172,24 @@ namespace cxx {
             // Gdy kopia playlistData w nowym std::make_shared się nie uda,
             // warto by rzucić wyjątek (na 90%?), dlatego go nie łapię.
             playlist & operator=(playlist other) {
-                data_ = other.unshareable_ // if
+                data_ = !other.shareable_ // if
                     ? std::make_shared<playlistData>(*other.data_) // then
                     : other.data_; // else
-                unshareable_ = false;
+                shareable_ = true;
                 return *this;
             }
 
+            // W TYM STYLU, TYLKO ZROBIĆ Z TEGO FUNKCJĘ FUNKCJI
             void push_back (T const &track, P const &params) { // O(log n)
+                auto ptr = data_;
                 ensure_unique();
-                data_->push_back(track, params);
+                try {
+                    data_->push_back(track, params);
+                    shareable_ = true;
+                } catch (...) {
+                    data_= ptr;
+                    throw;
+                }
             }
 
             void pop_front() { // O(1) + throws std::out_of_range
@@ -192,7 +200,7 @@ namespace cxx {
             // O(1) + std::out_of_range
             const std::pair<T const &, P const &> front() const {
                 if (data_->play_queue.empty()) {
-                    throw std::out_of_range("front(), empty playlist");
+                    throw std::out_of_range("front, playlist empty");
                 }
                 
                 playNode &node = data_->play_queue.front();
@@ -203,7 +211,7 @@ namespace cxx {
             void remove(T const &track) {
                 auto map_it = data_->tracks.find(track);
                 if (map_it == data_->tracks.end()) {
-                    throw std::invalid_argument("remove(), unknown track");
+                    throw std::invalid_argument("remove, unknown track");
                 }
                 
                 ensure_unique();
@@ -228,82 +236,94 @@ namespace cxx {
 
             // Implementacja iteratorów
             class play_iterator {
-                private:
-                    p_queue_iter it;
                 public:
-                    play_iterator(p_queue_iter pqi): it(pqi) {}
-                
-                    play_iterator &
-                    operator=(const play_iterator & o) = default;
+                    using iterator_category = std::forward_iterator_tag;
+                    using value_type = playNode;
+                    using difference_type = std::ptrdiff_t;
+                    using pointer = p_queue_iter;
+                    using reference = value_type&;
 
-                    std::strong_ordering 
-                    operator<=>(const play_iterator & o) = delete;
-                    bool operator==(const play_iterator & o) const = default;
-                    bool operator!=(const play_iterator & o) const = default;
+                    play_iterator(pointer p = nullptr): ptr{p} {}
+
+                    reference operator*() const noexcept {
+                        return *ptr;
+                    }
+
+                    pointer operator->() const noexcept {
+                        return ptr;
+                    }
 
                     play_iterator & operator++() {
-                        it++;
+                        ++ptr;
                         return *this;
                     }
 
                     play_iterator operator++(int) {
-                        play_iterator tmp(it);
-                        it++;
+                        play_iterator tmp(*this);
+                        ++ptr;
                         return tmp;
                     }
 
-                    const playNode & operator*() const noexcept {
-                        return *it;
-                    }
+                    bool operator==(const play_iterator & oth) const = default;
+                    bool operator!=(const play_iterator & oth) const = default;        
+                private:
+                    pointer ptr;
             };
 
             class sorted_iterator {
-                using t_map_c_iter = typename track_map::const_iterator;
-                private:
-                    t_map_c_iter it;       
                 public:
-                    sorted_iterator(t_map_c_iter tmci): it(tmci) {}
-                    sorted_iterator & 
-                    operator=(const sorted_iterator & o) = default;
+                    using iterator_category = std::forward_iterator_tag;
+                    using value_type = std::pair<T, std::list<p_queue_iter>>;
+                    using difference_type = std::ptrdiff_t;
+                    using pointer = typename track_map::const_iterator;
+                    using reference = const value_type&;
 
-                    std::strong_ordering 
-                    operator<=>(const sorted_iterator & o) = delete;
-                    bool operator==(const sorted_iterator & o) const = default;
-                    bool operator!=(const sorted_iterator & o) const = default;
+                    sorted_iterator(pointer p = nullptr): ptr{p} {}
+
+                    reference operator*() const noexcept {
+                        return *ptr;
+                    }
+
+                    pointer operator->() const noexcept {
+                        return ptr;
+                    }
 
                     sorted_iterator & operator++() {
-                        it++;
+                        ++ptr;
                         return *this;
                     }
 
                     sorted_iterator operator++(int) {
-                        sorted_iterator tmp(it);
-                        it++;
+                        sorted_iterator tmp(*this);
+                        ++ptr;
                         return tmp;
                     }
 
-                    const std::pair<T, std::list<p_queue_iter>> & operator*() const noexcept {
-                        return *it;
-                    }
+                    bool operator==(const sorted_iterator & oth) const = default;
+                    bool operator!=(const sorted_iterator & oth) const = default;        
+                private:
+                    pointer ptr;
             };
 
             const std::pair<T const &, P const &> play(play_iterator const &it)
             const {
-                return {(*it).track_nod_ptr->first, (*it).params};
+                return {it->track_nod_ptr->first, it->params};
             }
+
             const std::pair<T const &, size_t> pay(sorted_iterator const &it)
             const {
-                return {(*it).first, (*it).second.size()};
+                return {it->first, it->second.size()};
             }
 
             P & params(play_iterator const &it) {
                 ensure_unique();
-                unshareable_ = true;
+                shareable_ = false;
 
-                return (*it).params;
+                return it->params;
             }
+
             const P & params(play_iterator const &it) const {
-                return (*it).params;
+                return it->params;
             }
 
             play_iterator play_begin() const {

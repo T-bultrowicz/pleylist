@@ -1,0 +1,45 @@
+# Odtwarzamy pierwszy raz.
+zerowe 0:0
+pierwsze 0:1
+drugie 0:2
+trzecie 0:3
+pierwsze 0:4
+pierwsze 0:5
+zerowe 0:6
+# Płacimy.
+drugie 1
+pierwsze 3
+trzecie 1
+zerowe 2
+# Odtwarzamy drugi raz, usuwając utwory.
+zerowe 0:0
+pierwsze 0:1
+drugie 0:2
+trzecie 0:3
+pierwsze 0:4
+pierwsze 0:5
+zerowe 0:6
+# Testujemy zgłaszanie wyjątków.
+front, playlist empty
+pop_front, playlist empty
+remove, unknown track
+# Dodajemy utwory i odtwarzamy trzy początkowe.
+trzecie 0:0
+drugie 0:1
+trzecie 0:2
+# Zmieniamy parametry i odtwarzamy całość.
+trzecie 0:0
+drugie 0:1
+trzecie 17:52
+drugie 0:3
+pierwsze 0:4
+# Musimy zapłacić.
+pierwsze 1
+trzecie 2
+# Usuwamy jeden utwór i odtwarzamy.
+drugie 0:1
+drugie 0:3
+pierwsze 0:4
+# Płacimy za ostatnie odtworzenia.
+drugie 2
+pierwsze 1
