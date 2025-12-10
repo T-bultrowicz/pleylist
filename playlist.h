@@ -1,5 +1,5 @@
 // TODO:
-// noexept
+// params modifiable buggg -> we need to return correct params, after we copy playlist
 // hide operator (*) and (->) from user
 
 #ifndef PLAYLIST_H
@@ -140,7 +140,11 @@ namespace cxx {
 
             // magia shared_ptr - pozwala nam na użycie default lub proste
             // przypisanie, bez sprawdzania czy this != &opther.
-            playlist(playlist &&other) = default;
+            playlist(playlist &&other)
+                : data_(std::move(other.data_)), shareable_(other.shareable_) {
+                    other.data_ = std::make_shared<playlistData>();
+                    other.shareable_ = true;
+                }
             ~playlist() = default;
 
             // Gdy kopia playlistData w nowym std::make_shared się nie uda,
@@ -152,6 +156,7 @@ namespace cxx {
                 shareable_ = true;
                 return *this;
             }
+            // const playlist & operator=(playlist other)
 
             // W TYM STYLU, TYLKO ZROBIĆ Z TEGO FUNKCJĘ FUNKCJI
             void push_back (T const &track, P const &params) { // O(log n)
@@ -311,8 +316,12 @@ namespace cxx {
             P & params(play_iterator const &it) {
                 auto ptr = data_;
                 try {
-                    ensure_count(2);
                     P & res = it->params;
+                    ensure_count(2);
+                    // zrobiliśmy kopię, więc
+                    if (ptr.use_count() > 1) {
+
+                    }
                     shareable_ = false;
                     return res;
                 } catch (...) {
