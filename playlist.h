@@ -1,7 +1,6 @@
 // TODO:
-// make_unique wrapper
 // noexept
-// fix loop (mby this != other while copying)
+// hide operator (*) and (->) from user
 
 #ifndef PLAYLIST_H
 #define PLAYLIST_H
@@ -42,7 +41,7 @@ namespace cxx {
             // wywołać na tej liście .erase(self_ptr)
             struct playNode {
                 typename track_map::iterator track_nod_ptr;
-                typename std::list<p_queue_iter>::iterator self_ptr;
+                std::list<p_queue_iter>::iterator self_ptr;
                 P params;
             };
 
@@ -94,7 +93,6 @@ namespace cxx {
                     // get iterator for this node
                     p_queue_iter queue_it = std::prev(play_queue.end());
 
-                    // Może tak jest trochę czytelniej?
                     try {
                         auto list_it = map_it->second.insert
                                             (map_it->second.end(), queue_it);
@@ -106,26 +104,6 @@ namespace cxx {
                             tracks.erase(map_it);
                         throw;
                     }
-                }
-
-                // if all node destructors are noexept
-                // then all the erase / pop function call are also noexept
-                // thus this whole fuction should be strongly exeption safe ?  --> I think yep,
-                // destructors can't really throw anything.
-                void pop_front() {
-                    if (play_queue.empty()) {
-                        throw std::out_of_range("pop_front, playlist empty");
-                    }
-
-                    playNode &node = play_queue.front();
-
-                    node.track_nod_ptr->second.erase(node.self_ptr);
-                    // only play of the track => remove it from the map
-                    if (node.track_nod_ptr->second.empty()) {
-                        tracks.erase(node.track_nod_ptr);
-                    }
-                    
-                    play_queue.pop_front();
                 }
             };
 
@@ -139,19 +117,10 @@ namespace cxx {
             */
             bool shareable_ = false;
 
-            /*
-            Kontener powinien realizować semantykę kopiowania przy modyfikowaniu (ang. copy on write).
-            Kopiowanie przy modyfikowaniu to technika optymalizacji szeroko stosowana m.in. w strukturach danych z biblioteki Qt oraz dawniej w implementacjach std::string. Podstawowa jej idea jest taka, że gdy tworzymy kopię obiektu (w C++ za pomocą konstruktora kopiującego lub operatora przypisania), to współdzieli ona wszystkie wewnętrzne zasoby (które mogą być przechowywane w oddzielnym obiekcie na stercie) z obiektem źródłowym.
-            Taki stan trwa do momentu, w którym jedna z kopii musi zostać zmodyfikowana.
-            Wtedy modyfikowany obiekt tworzy własną kopię zasobów, na których wykonuje modyfikację. Udostępnienie referencji nie-const umożliwiającej modyfikowanie stanu struktury uniemożliwia jej (dalsze) współdzielenie do czasu unieważnienia udzielonej referencji.
-            Przyjmujemy, że taka referencja ulega unieważnieniu po dowolnej modyfikacji struktury.
-            */
-            
-            // Po wywołaniu tej funkcji obiekt ma pewność,
-            // że brudzi dane, do którychma wyłączny dostęp.
-            // Daje strong excp-guarantee, wyrzuca wyjątek dalej.
-            void ensure_unique() {
-                if (data_.use_count() > 1) {
+            // Chroni przed brudzeniem danych, których nie mamy na wyłączność.
+            // Powinna być wołana z count = 1 + #[rollback_pointers]
+            void ensure_count(long int count) {
+                if (data_.use_count() > count) {
                     data_ = std::make_shared<playlistData>(*data_);
                 }
             }
@@ -165,9 +134,9 @@ namespace cxx {
             // używamy do tego dobrze przepinającego wskaźniki konstruktora
             // kopiującego klasy playlistData.
             playlist(playlist const &other)
-                : data_(!other.shareable_ // if
+                : data_(!other.shareable_                          // if
                     ? std::make_shared<playlistData>(*other.data_) // then
-                    : other.data_), shareable_(true) {} // else
+                    : other.data_), shareable_(true) {}            // else
 
             // magia shared_ptr - pozwala nam na użycie default lub proste
             // przypisanie, bez sprawdzania czy this != &opther.
@@ -177,9 +146,9 @@ namespace cxx {
             // Gdy kopia playlistData w nowym std::make_shared się nie uda,
             // warto by rzucić wyjątek (na 90%?), dlatego go nie łapię.
             playlist & operator=(playlist other) {
-                data_ = !other.shareable_ // if
+                data_ = !other.shareable_                          // if
                     ? std::make_shared<playlistData>(*other.data_) // then
-                    : other.data_; // else
+                    : other.data_;                                 // else
                 shareable_ = true;
                 return *this;
             }
@@ -187,8 +156,8 @@ namespace cxx {
             // W TYM STYLU, TYLKO ZROBIĆ Z TEGO FUNKCJĘ FUNKCJI
             void push_back (T const &track, P const &params) { // O(log n)
                 auto ptr = data_;
-                ensure_unique();
                 try {
+                    ensure_count(2);
                     data_->push_back(track, params);
                     shareable_ = true;
                 } catch (...) {
@@ -197,9 +166,26 @@ namespace cxx {
                 }
             }
 
-            void pop_front() { // O(1) + throws std::out_of_range
-                ensure_unique();
-                data_->pop_front();
+            // if all node destructors are noexept
+            // then all the erase / pop function call are also noexept
+            // thus this whole fuction should be strongly exeption safe ?  --> I think yep,
+            // destructors can't really throw anything.
+            void pop_front() {
+                if (data_->play_queue.empty()) {
+                    throw std::out_of_range("pop_front, playlist empty");
+                }
+                ensure_count(1);
+
+                playNode &node = data_->play_queue.front();
+
+                node.track_nod_ptr->second.erase(node.self_ptr);
+                // only play of the track => remove it from the map
+                if (node.track_nod_ptr->second.empty()) {
+                    data_->tracks.erase(node.track_nod_ptr);
+                }
+                data_->play_queue.pop_front();
+
+                shareable_ = true;
             }
 
             // O(1) + std::out_of_range
@@ -218,24 +204,24 @@ namespace cxx {
                 if (map_it == data_->tracks.end()) {
                     throw std::invalid_argument("remove, unknown track");
                 }
-                
-                ensure_unique();
+                ensure_count(1);
                 
                 auto &occurrences = map_it->second;
                 for (auto &queue_it : occurrences) {
                     data_->play_queue.erase(queue_it);
                 }
-                
                 data_->tracks.erase(map_it);
+
+                shareable_ = true;
             }
 
             // strong expc guarantee bo tylko make_shared się wywala ->
             // wtedy nie dochodzi do przypisania.
-            void clear() {
+            void clear() noexcept {
                 data_ = std::make_shared<playlistData>();
             }
 
-            size_t size() const { // O(1)
+            size_t size() const noexcept { // O(1)
                 return data_->play_queue.size();
             }
 
@@ -320,30 +306,38 @@ namespace cxx {
                 return {it->first, it->second.size()};
             }
 
+            // Bo iterator może być nieważny i rzucać wyjątek, 
+            // a my już zrobimy kopię...
             P & params(play_iterator const &it) {
-                ensure_unique();
-                shareable_ = false;
-
-                return it->params;
+                auto ptr = data_;
+                try {
+                    ensure_count(2);
+                    P & res = it->params;
+                    shareable_ = false;
+                    return res;
+                } catch (...) {
+                    data_ = ptr;
+                    throw;
+                }
             }
 
             const P & params(play_iterator const &it) const {
                 return it->params;
             }
 
-            play_iterator play_begin() const {
+            play_iterator play_begin() const noexcept {
                 return play_iterator(data_->play_queue.begin());
             }
 
-            play_iterator play_end() const {
+            play_iterator play_end() const noexcept {
                 return play_iterator(data_->play_queue.end());
             }
 
-            sorted_iterator sorted_begin() const {
+            sorted_iterator sorted_begin() const noexcept {
                 return sorted_iterator(data_->tracks.begin());
             }
 
-            sorted_iterator sorted_end() const {
+            sorted_iterator sorted_end() const noexcept {
                 return sorted_iterator(data_->tracks.end());
             }
     };
