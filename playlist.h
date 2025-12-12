@@ -1,8 +1,6 @@
-// TODO:
-// hide operator (*) and (->) from user
-
 #ifndef PLAYLIST_H
 #define PLAYLIST_H
+
 #include <cstdlib>
 #include <cstddef>
 #include <compare>
@@ -20,40 +18,35 @@ namespace cxx {
         private:
             ///////////////// DATA TYPES DEFINITIONS /////////////////
 
-            // forward declaration
+            // Forward declaration
             struct playNode; 
 
-            // Właściwa playlista, trzyma dane typu playNode
+            // Actual playlist, holds playNodes
             using p_queue = std::list<playNode>;
             using p_queue_iter = typename p_queue::iterator;
 
-            // Mapa do przechowywania pojedynczych kopi utworów. 
-            // Ponadto trzyma listę iteratorów na miejsca w playliście,
-            // które odtwarzają utwór spod klucza.
+            // Map that holds singular copies of tracks. Besides that
+            // it holds list of iters to positions where track is played.
             using track_map = std::map<T, std::list<p_queue_iter>>;
 
-            // Dane o pojedynczym odtworzeniu - trzyma unikatowe dla odtworzenia
-            // params. Informację o podanym utworze pozyskujemy z track_nod_ptr.
-            // Ponieważ track_nod_ptr w liście będącej wartością trzyma wskaźnik
-            // na nas, to przy usuwaniu playNode, naszą odpowiedzialnością jest, aby
-            // wywołać na tej liście .erase(self_ptr)
+            /* Data about singular play, holds unique params for that play.
+             * Has track_nod_ptr to 'download' track from a track_map. Self_ptr,
+             * is used only when deleting, to quickly erase info that track_map
+             * holds, pointing at this-to-be-deleted node.
+             */
             struct playNode {
                 typename track_map::iterator track_nod_ptr;
                 std::list<p_queue_iter>::iterator self_ptr;
                 P params;
             };
 
-            // Tutaj naprawdę przechowywane są dane playlisty, definiowana jest
-            // też większośc operacji. Operacje playlisty to głównie wrappery.
+            // Here actual playlist data is stored. It provides save deep
+            // copy-constructor that rebuilds pointer structure.
             struct playlistData {
                 p_queue play_queue{};
                 track_map tracks{};
 
                 playlistData() = default;
-
-                // Robi głęboką kopię, zgodną z logiką plejlist (dpowiednio
-                // przestawia wskaźniki). Zadba o to by nie stworzyć obiektu,
-                // jeśli push_back się nie powiedzie.
                 playlistData(const playlistData & other) {
                     const p_queue & pq = other.play_queue;
                     for (auto it = pq.begin(); it != pq.end(); ++it) {
@@ -63,17 +56,14 @@ namespace cxx {
                 playlistData(playlistData && other) = default;
                 ~playlistData() = default;
 
-                // Usuwamy operator=, bo pozwalałby na robienie niebezpiecznych
-                // kopii, jako, że nasze obiekty trzymają wskaźniki na siebie.
+                // Not really used, but very dangerous when used defaultly,
+                // (not like copy constructor) so better left deleted.
                 playlistData & operator=(const playlistData & other) = delete;
 
-                // Tymczasowy jest jednak bezpieczny, bo przywłaszczymy sobie
-                // całą strukturę, wraz z odpowiedzialnością za nią.
-                playlistData & operator=(playlistData && other) = default;
-
-                // Twoja funkcja - tylko przesunąłem ją niżej, bo tu się też
-                // przyda. Ponadto trochę pozmieniałem, by uzyskać strong
-                // exception safety.
+                /* Functions that correctly handles pointer-pinning when adding
+                 * a single play to a playlist. Guarantees nothing is added / 
+                 * changed when exception is thrown.
+                 */
                 void push_back (T const &track, P const &params) {
                     // emplace już gwarantuje strong excp-safety....
                     auto [map_it, added] = tracks.emplace(track, 
@@ -82,7 +72,7 @@ namespace cxx {
                     try {
                         play_queue.push_back({map_it, {}, params});
                     } catch (...) {
-                        // rollback zmian 1, push_back nie wyszedł
+                        // rollback 1, push_back failed
                         if (added)
                             tracks.erase(map_it);
                         throw;
@@ -96,7 +86,7 @@ namespace cxx {
                                             (map_it->second.end(), queue_it);
                         queue_it->self_ptr = list_it;
                     } catch (...) {
-                        // rollback zmian 2, jeśli insert nie wyszedł
+                        // rollback 2, insert failed
                         play_queue.pop_back();
                         if (added)
                             tracks.erase(map_it);
@@ -105,18 +95,16 @@ namespace cxx {
                 }
             };
 
+            /* Flag and shared_ptr needed to provide COW for playlist object.
+             * Shareable is set to true whenever we give to user modifying
+             * reference, and set to false after aby other sort of modifying
+             * operation. Flag sets COW optimisation off.
+             */
             std::shared_ptr<playlistData> data_;
-            /* Wydaje mi się że ta flaga jest konieczna, była w jednym z GOTW co
-             * Peczarski wrzucał. W implementacji stringów, których kontenery maja
-             * się zachowywać 1 do 1 jak nasze playlistData.
-             * Ona ma być ustawiana na true, gdy udostępnimy użytkownikowi iterator.
-             * Wtedy nie będzie bugu, że damy iterator, skopiujemy siebie, a potem ten
-             * iterator zmieni nie tylko nas, ale też obiekt który z siebie stworzyliśmy.
-            */
-            bool shareable_ = false;
+            bool shareable_ = true;
 
-            // Chroni przed brudzeniem danych, których nie mamy na wyłączność.
-            // Jako argument podajemy ilość wskaźników, jakie MY trzymamy.
+            // Makes data_ point at a new copy, when data is shared by more
+            // than a [count] pointer instances. Helper function.
             void ensure_count(long int count) {
                 if (data_.use_count() > count) {
                     data_ = std::make_shared<playlistData>(*data_);
@@ -126,26 +114,21 @@ namespace cxx {
         public:
             playlist()
                 : data_(std::make_shared<playlistData>()) {}
-            
-            // Jeśli other jest w trakcie modyfikacji, musimy go skopiować,
-            // używamy do tego dobrze przepinającego wskaźniki konstruktora
-            // kopiującego klasy playlistData.
+
             playlist(playlist const &other)
                 : data_(!other.shareable_                          // if
                     ? std::make_shared<playlistData>(*other.data_) // then
                     : other.data_), shareable_(true) {}            // else
 
-            // magia shared_ptr - pozwala nam na użycie default lub proste
-            // przypisanie, bez sprawdzania czy this != &opther.
+            // Although technically we can leave other in damaged state, we
+            // leave him in correct, empty state.
             playlist(playlist &&other)
                 : data_(std::move(other.data_)), shareable_(other.shareable_) {
                     other.data_ = std::make_shared<playlistData>();
                     other.shareable_ = true;
                 }
+            
             ~playlist() = default;
-
-            // Gdy kopia playlistData w nowym std::make_shared się nie uda,
-            // warto by rzucić wyjątek (na 90%?), dlatego go nie łapię.
             playlist & operator=(playlist other) {
                 data_ = !other.shareable_                          // if
                     ? std::make_shared<playlistData>(*other.data_) // then
@@ -153,9 +136,8 @@ namespace cxx {
                 shareable_ = true;
                 return *this;
             }
-            // const playlist & operator=(playlist other)
 
-            // W TYM STYLU, TYLKO ZROBIĆ Z TEGO FUNKCJĘ FUNKCJI
+            // Uses push_back inside playlistData class.
             void push_back (T const &track, P const &params) { // O(log n)
                 auto ptr = data_;
                 try {
@@ -168,10 +150,6 @@ namespace cxx {
                 }
             }
 
-            // if all node destructors are noexept
-            // then all the erase / pop function call are also noexept
-            // thus this whole fuction should be strongly exeption safe ?  --> I think yep,
-            // destructors can't really throw anything.
             void pop_front() {
                 if (data_->play_queue.empty()) {
                     throw std::out_of_range("pop_front, playlist empty");
@@ -179,9 +157,9 @@ namespace cxx {
                 ensure_count(1);
 
                 playNode &node = data_->play_queue.front();
-
                 node.track_nod_ptr->second.erase(node.self_ptr);
-                // only play of the track => remove it from the map
+
+                // track not present in playlist => remove ir
                 if (node.track_nod_ptr->second.empty()) {
                     data_->tracks.erase(node.track_nod_ptr);
                 }
@@ -190,7 +168,6 @@ namespace cxx {
                 shareable_ = true;
             }
 
-            // O(1) + std::out_of_range
             const std::pair<T const &, P const &> front() const {
                 if (data_->play_queue.empty()) {
                     throw std::out_of_range("front, playlist empty");
@@ -200,13 +177,13 @@ namespace cxx {
                 return {node.track_nod_ptr->first, node.params};
             }
 
-            // O((k + 1)log n) + std::invalid_argument 
             void remove(T const &track) {
                 auto map_it = data_->tracks.find(track);
                 if (map_it == data_->tracks.end()) {
                     throw std::invalid_argument("remove, unknown track");
                 }
                 ensure_count(1);
+                // after here, only destructors, so nothing should be thrown
                 map_it = data_->tracks.find(track);
                 
                 auto &occurrences = map_it->second;
@@ -222,13 +199,13 @@ namespace cxx {
                 data_ = std::make_shared<playlistData>();
             }
 
-            size_t size() const noexcept { // O(1)
+            size_t size() const noexcept {
                 return data_->play_queue.size();
             }
 
-            // Implementacja iteratorów
+            // Iterators implementation
             class play_iterator {
-                // Deklarujemy przyjaźń, by móc schować operatory * i ->.
+                // Declaring friendship, so we can hide * and -> operands.
                 friend class playlist;
 
                 public:
@@ -266,7 +243,7 @@ namespace cxx {
             };
 
             class sorted_iterator {
-                // Deklarujemy przyjaźń, by móc schować operatory * i ->.
+                // Declaring friendship, so we can hide * and -> operands.
                 friend class playlist;
 
                 public:
@@ -313,6 +290,11 @@ namespace cxx {
                 return {it->first, it->second.size()};
             }
 
+            /* Only function returning modifying refernce to the user. That's
+             * why it needs to set sharable_ to false. It can throw both
+             * when it is incorrect or if making a copy of internal state fails,
+             * but guarantees strong exception safety, by using backup - 'copy'.
+             */
             P & params(play_iterator const &it) {
                 auto copy = data_;
                 P * res;
@@ -322,6 +304,10 @@ namespace cxx {
                     if (data_.use_count() > 2) {
                         data_ = std::make_shared<playlistData>();
                         auto & pq = copy->play_queue;
+
+                        // We can't jsut use playlistData copy constructor, as
+                        // we need to make sure we give to user reference to
+                        // correct, freshly created, playNode params.
                         for (auto it2 = pq.begin(); it2 != pq.end(); ++it2) {
                             data_->push_back(
                                         it2->track_nod_ptr->first, 
@@ -340,6 +326,7 @@ namespace cxx {
                 return *res;
             }
 
+            // Rest of functions giving user access to the structure.
             const P & params(play_iterator const &it) const {
                 return it->params;
             }
