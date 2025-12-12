@@ -1,10 +1,8 @@
 // TODO:
-// params modifiable buggg -> we need to return correct params, after we copy playlist
 // hide operator (*) and (->) from user
 
 #ifndef PLAYLIST_H
 #define PLAYLIST_H
-
 #include <cstdlib>
 #include <cstddef>
 #include <compare>
@@ -118,7 +116,7 @@ namespace cxx {
             bool shareable_ = false;
 
             // Chroni przed brudzeniem danych, których nie mamy na wyłączność.
-            // Powinna być wołana z count = 1 + #[rollback_pointers]
+            // Jako argument podajemy ilość wskaźników, jakie MY trzymamy.
             void ensure_count(long int count) {
                 if (data_.use_count() > count) {
                     data_ = std::make_shared<playlistData>(*data_);
@@ -126,7 +124,6 @@ namespace cxx {
             }
 
         public:
-            // TODO add const, noexept where its needed
             playlist()
                 : data_(std::make_shared<playlistData>()) {}
             
@@ -210,6 +207,7 @@ namespace cxx {
                     throw std::invalid_argument("remove, unknown track");
                 }
                 ensure_count(1);
+                map_it = data_->tracks.find(track);
                 
                 auto &occurrences = map_it->second;
                 for (auto &queue_it : occurrences) {
@@ -220,9 +218,7 @@ namespace cxx {
                 shareable_ = true;
             }
 
-            // strong expc guarantee bo tylko make_shared się wywala ->
-            // wtedy nie dochodzi do przypisania.
-            void clear() noexcept {
+            void clear() {
                 data_ = std::make_shared<playlistData>();
             }
 
@@ -232,22 +228,15 @@ namespace cxx {
 
             // Implementacja iteratorów
             class play_iterator {
+                // Deklarujemy przyjaźń, by móc schować operatory * i ->.
+                friend class playlist;
+
                 public:
                     using iterator_category = std::forward_iterator_tag;
                     using value_type = playNode;
                     using difference_type = std::ptrdiff_t;
                     using pointer = p_queue_iter;
                     using reference = value_type&;
-
-                    play_iterator(pointer p = nullptr): ptr{p} {}
-
-                    reference operator*() const noexcept {
-                        return *ptr;
-                    }
-
-                    pointer operator->() const noexcept {
-                        return ptr;
-                    }
 
                     play_iterator & operator++() {
                         ++ptr;
@@ -261,20 +250,11 @@ namespace cxx {
                     }
 
                     bool operator==(const play_iterator & oth) const = default;
-                    bool operator!=(const play_iterator & oth) const = default;        
+                    bool operator!=(const play_iterator & oth) const = default;
                 private:
                     pointer ptr;
-            };
 
-            class sorted_iterator {
-                public:
-                    using iterator_category = std::forward_iterator_tag;
-                    using value_type = std::pair<T, std::list<p_queue_iter>>;
-                    using difference_type = std::ptrdiff_t;
-                    using pointer = typename track_map::const_iterator;
-                    using reference = const value_type&;
-
-                    sorted_iterator(pointer p = nullptr): ptr{p} {}
+                    play_iterator(pointer p = nullptr): ptr{p} {}
 
                     reference operator*() const noexcept {
                         return *ptr;
@@ -283,6 +263,18 @@ namespace cxx {
                     pointer operator->() const noexcept {
                         return ptr;
                     }
+            };
+
+            class sorted_iterator {
+                // Deklarujemy przyjaźń, by móc schować operatory * i ->.
+                friend class playlist;
+
+                public:
+                    using iterator_category = std::forward_iterator_tag;
+                    using value_type = std::pair<T, std::list<p_queue_iter>>;
+                    using difference_type = std::ptrdiff_t;
+                    using pointer = typename track_map::const_iterator;
+                    using reference = const value_type&;
 
                     sorted_iterator & operator++() {
                         ++ptr;
@@ -299,6 +291,16 @@ namespace cxx {
                     bool operator!=(const sorted_iterator & oth) const = default;        
                 private:
                     pointer ptr;
+
+                    sorted_iterator(pointer p = nullptr): ptr{p} {}
+
+                    reference operator*() const noexcept {
+                        return *ptr;
+                    }
+
+                    pointer operator->() const noexcept {
+                        return ptr;
+                    }
             };
 
             const std::pair<T const &, P const &> play(play_iterator const &it)
@@ -311,23 +313,31 @@ namespace cxx {
                 return {it->first, it->second.size()};
             }
 
-            // Bo iterator może być nieważny i rzucać wyjątek, 
-            // a my już zrobimy kopię...
             P & params(play_iterator const &it) {
-                auto ptr = data_;
-                try {
-                    P & res = it->params;
-                    ensure_count(2);
-                    // zrobiliśmy kopię, więc
-                    if (ptr.use_count() > 1) {
+                auto copy = data_;
+                P * res;
 
+                try {
+                    res = &(it->params);
+                    if (data_.use_count() > 2) {
+                        data_ = std::make_shared<playlistData>();
+                        auto & pq = copy->play_queue;
+                        for (auto it2 = pq.begin(); it2 != pq.end(); ++it2) {
+                            data_->push_back(
+                                        it2->track_nod_ptr->first, 
+                                        it2->params);
+                            if (it2 == it.ptr) {
+                                res = &(data_->play_queue.back().params);
+                            }
+                        }
                     }
-                    shareable_ = false;
-                    return res;
                 } catch (...) {
-                    data_ = ptr;
+                    data_ = copy;
                     throw;
                 }
+
+                shareable_ = false;
+                return *res;
             }
 
             const P & params(play_iterator const &it) const {

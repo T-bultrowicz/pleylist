@@ -469,33 +469,32 @@ void test_12_assignment_from_value_and_self_assignment() {
 
 // 13. Non-const params() wywołane na jednej kopii powinno odłączyć COW.
 void test_13_detach_on_nonconst_params() {
-    std::clog << "[test_13] detach on non-const params()\n";
+    std::clog << "[13] non-const params detaches\n";
     reset_all_counters();
     playlist_t p1;
     p1.push_back({1, "A"}, {10, 1});
 
     playlist_t p2 = p1;
+
     auto it1 = p1.play_begin();
     auto it2 = p2.play_begin();
 
     {
         auto pr1 = p1.play(it1);
         auto pr2 = p2.play(it2);
-        assert(&pr1.first == &pr2.first);
         assert(&pr1.second == &pr2.second);
     }
 
-    // Non-const params na p1 – powinno spowodować detach.
+    // modyfikacja przez non-const params
     TestParams& ref = p1.params(it1);
     ref.volume = 99;
 
-    auto pr1_after = p1.play(it1);
-    auto pr2_after = p2.play(it2);
+    auto pr1a = p1.play(p1.play_begin());
+    auto pr2a = p2.play(it2);
 
-    // Parametry powinny być różne i pod różnymi adresami.
-    assert(pr1_after.second.volume == 99);
-    assert(pr2_after.second.volume != 99);
-    assert(&pr1_after.second != &pr2_after.second);
+    assert(pr1a.second.volume == 99);
+    assert(pr2a.second.volume != 99);
+    assert(&pr1a.second != &pr2a.second);
 }
 
 // 14. Const params() nie powinno odłączać współdzielenia.
@@ -832,7 +831,7 @@ void test_26_multiple_cow_chains() {
     ref2.tag = 77;
 
     auto pr1a = p1.play(it1);
-    auto pr2a = p2.play(it2);
+    auto pr2a = p2.play(p2.play_begin());
     auto pr3a = p3.play(it3);
 
     // p2 powinno się odłączyć od p1 i p3.

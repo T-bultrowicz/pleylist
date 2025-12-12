@@ -488,7 +488,7 @@ void test_13_params_nonconst_detach() {
     TestParams& ref = p1.params(it1);
     ref.volume = 99;
 
-    auto pr1a = p1.play(it1);
+    auto pr1a = p1.play(p1.play_begin());
     auto pr2a = p2.play(it2);
 
     assert(pr1a.second.volume == 99);
@@ -821,7 +821,7 @@ void test_26_multiple_cow_chain() {
     ref2.tag = 77;
 
     auto pr1a = p1.play(it1);
-    auto pr2a = p2.play(it2);
+    auto pr2a = p2.play(p2.play_begin());
     auto pr3a = p3.play(it3);
 
     assert(&pr2a.second != &pr1a.second);
@@ -967,6 +967,12 @@ int main() {
         test_29_pay_is_read_only();
         test_30_lifetime_counters();
         test_31_MM_signature_test();
+        cxx::playlist<int, double> play;
+        play.push_back(1, 2.0);
+        play.push_back(4, 3.7);
+        cxx::playlist<int, double>::play_iterator it = play.play_begin();
+        it++;
+        assert(play.params(it) == 3.7);
     } catch (...) {
         assert(false && "Uncaught exception in tests");
     }
